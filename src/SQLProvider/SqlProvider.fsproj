@@ -28,7 +28,7 @@
     <DocumentationFile>
     </DocumentationFile>
     <StartAction>Program</StartAction>
-    <StartProgram>D:\Appdev\SqlProvider\tests\SqlProvider.Tests\Test.Console\bin\Debug\Test.Console.exe</StartProgram>
+    <StartProgram>C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\Common7\IDE\devenv.exe</StartProgram>
     <StartArguments>
     </StartArguments>
   </PropertyGroup>
@@ -70,6 +70,7 @@
     <Compile Include="QuotationHelpers.fs" />
     <Compile Include="SqlRuntime.Transactions.fs" />
     <Compile Include="SqlRuntime.Common.fs" />
+    <Compile Include="DacParser.fs" />
     <Compile Include="Providers.MsSqlServer.fs" />
     <Compile Include="Providers.MSAccess.fs" />
     <Compile Include="Providers.MySql.fs" />
@@ -94,6 +95,8 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="System.IdentityModel" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.ServiceModel" />
     <Reference Include="System.Transactions" />

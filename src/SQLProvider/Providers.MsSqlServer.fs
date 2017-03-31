@@ -79,7 +79,7 @@ module MSSqlServer =
         if Convert.IsDBNull(v) then def else unbox v
 
     let connect (con:IDbConnection) f =
-        if con.State <> ConnectionState.Open then con.Open()
+        if con <> null && con.State <> ConnectionState.Open then con.Open()
         let result = f con
         con.Close(); result
 
@@ -94,6 +94,7 @@ module MSSqlServer =
         else null
 
     let isSQL2012Orlater (con:IDbConnection) =
+        if con <> null then false else
         try
             let reader = executeSql "SELECT SERVERPROPERTY('productversion')" con
             let version = reader.GetSqlString(0)
@@ -111,6 +112,7 @@ module MSSqlServer =
         p :> IDbDataParameter
 
     let getSprocReturnCols (con: IDbConnection) (sname: SprocName) (sparams: QueryParameter list) =
+        if true then [] else
         let parameterStr =
             String.Join(", ", sparams
                               |> List.filter (fun p -> p.Direction <> ParameterDirection.ReturnValue)
@@ -183,6 +185,7 @@ module MSSqlServer =
         |> Seq.toList
 
     let getSprocs (con: IDbConnection) =
+        if true then [] else
         let con = (con :?> SqlConnection)
 
         let tableValued =
@@ -274,11 +277,12 @@ module MSSqlServer =
             use reader = com.ExecuteReader() :?> SqlDataReader
             Set(cols |> Array.map (processReturnColumn reader))
 
-type internal MSSqlServerProvider(tableNames:string) =
+type internal MSSqlServerProvider(tableNames:string, dacPath:string) =
     let pkLookup = ConcurrentDictionary<string,string list>()
     let tableLookup = ConcurrentDictionary<string,Table>()
     let columnLookup = ConcurrentDictionary<string,ColumnLookup>()
     let relationshipLookup = ConcurrentDictionary<string,Relationship list * Relationship list>()
+    let dac = DacParser.parse dacPath
 
     let createInsertCommand (con:IDbConnection) (sb:Text.StringBuilder) (entity:SqlEntity) =
         let (~~) (t:string) = sb.Append t |> ignore
@@ -389,6 +393,8 @@ type internal MSSqlServerProvider(tableNames:string) =
         cmd
 
     interface ISqlProvider with
+        member __.CreateConnection(connectionString) = if String.IsNullOrWhiteSpace connectionString then null else MSSqlServer.createConnection connectionString
+        member __.CreateCommand(connection,commandText) = if connection = null then null else MSSqlServer.createCommand commandText connection
         member __.GetTableDescription(con,tableName) = 
             let tn = tableName.Substring(tableName.LastIndexOf(".")+1) 
             let baseq =
@@ -431,33 +437,43 @@ type internal MSSqlServerProvider(tableNames:string) =
                 with 
                 | :? InvalidCastException -> ""
             else ""
-        member __.CreateConnection(connectionString) = MSSqlServer.createConnection connectionString
-        member __.CreateCommand(connection,commandText) = MSSqlServer.createCommand commandText connection
         member __.CreateCommandParameter(param, value) = MSSqlServer.createCommandParameter param value
         member __.ExecuteSprocCommand(con, inputParameters, returnCols, values:obj array) = MSSqlServer.executeSprocCommand con inputParameters returnCols values
-        member __.CreateTypeMappings(con) = MSSqlServer.createTypeMappings con
+        member __.CreateTypeMappings(con) = if con = null then () else MSSqlServer.createTypeMappings con
         
         member __.GetTables(con,_) =
-            let tableNamesFilter =
-                match tableNames with 
-                | "" -> ""
-                | x -> " where 1=1 " + (SchemaProjections.buildTableNameWhereFilter "TABLE_NAME" tableNames)
-            MSSqlServer.connect con (fun con ->
-            use reader = MSSqlServer.executeSql ("select TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE from INFORMATION_SCHEMA.TABLES" + tableNamesFilter) con
-            [ while reader.Read() do
-                let table ={ Schema = reader.GetSqlString(0).Value ; Name = reader.GetSqlString(1).Value ; Type=reader.GetSqlString(2).Value.ToLower() }
-                yield tableLookup.GetOrAdd(table.FullName,table)
-                ])
+            if not <| String.IsNullOrWhiteSpace dacPath then
+                [ for table in DacParser.getTables dac do
+                    yield tableLookup.GetOrAdd(table.FullName, table
+                    )]
+            else
+                let tableNamesFilter =
+                    match tableNames with 
+                    | "" -> ""
+                    | x -> " where 1=1 " + (SchemaProjections.buildTableNameWhereFilter "TABLE_NAME" tableNames)
+                MSSqlServer.connect con (fun con ->
+                use reader = MSSqlServer.executeSql ("select TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE from INFORMATION_SCHEMA.TABLES" + tableNamesFilter) con
+                [ while reader.Read() do
+                    let table ={ Schema = reader.GetSqlString(0).Value ; Name = reader.GetSqlString(1).Value ; Type=reader.GetSqlString(2).Value.ToLower() }
+                    yield tableLookup.GetOrAdd(table.FullName,table)
+                    ])
 
         member __.GetPrimaryKey(table) =
-            match pkLookup.TryGetValue table.FullName with
-            | true, [v] -> Some v
-            | _ -> None
+            if not <| String.IsNullOrWhiteSpace dacPath then
+                DacParser.getPrimaryKey dac table
+            else
+                match pkLookup.TryGetValue table.FullName with
+                | true, [v] -> Some v
+                | _ -> None
 
         member __.GetColumns(con,table) =
             match columnLookup.TryGetValue table.FullName with
             | (true,data) when data.Count > 0 -> data
             | _ ->
+            if not <| String.IsNullOrWhiteSpace dacPath then
+                let columns = DacParser.getColumns dac table MSSqlServer.findDbType
+                columnLookup.AddOrUpdate(table.FullName, columns, fun x old -> match columns.Count with 0 -> old | x -> columns)
+            else
                // note this data can be obtained using con.GetSchema, and i didn't know at the time about the restrictions you can
                // pass in to filter by table name etc - we should probably swap this code to use that instead at some point
                // but hey, this works
@@ -507,6 +523,7 @@ type internal MSSqlServerProvider(tableNames:string) =
                columnLookup.AddOrUpdate(table.FullName, columns, fun x old -> match columns.Count with 0 -> old | x -> columns)
 
         member __.GetRelationships(con,table) =
+          if true then [], [] else
           relationshipLookup.GetOrAdd(table.FullName, fun name ->
             // mostly stolen from
             // http://msdn.microsoft.com/en-us/library/aa175805(SQL.80).aspx
@@ -557,7 +574,7 @@ type internal MSSqlServerProvider(tableNames:string) =
                 (children,parents))
             res)
 
-        member __.GetSprocs(con) = MSSqlServer.connect con MSSqlServer.getSprocs
+        member __.GetSprocs(con) = if con = null then [] else MSSqlServer.connect con MSSqlServer.getSprocs
         member __.GetIndividualsQueryText(table,amount) = sprintf "SELECT TOP %i * FROM %s" amount table.FullName
         member __.GetIndividualQueryText(table,column) = sprintf "SELECT * FROM [%s].[%s] WHERE [%s].[%s].[%s] = @id" table.Schema table.Name table.Schema table.Name column
 
